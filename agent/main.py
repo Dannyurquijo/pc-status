@@ -14,12 +14,12 @@ import socketserver
 import urllib.parse
 import psutil
 
-# Import local hardware collector
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hardware
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
-WEB_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "web"))
+# Serve static Web UI files from root directory where index.html is located
+WEB_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 def load_config():
     default_config = {
@@ -147,7 +147,7 @@ def run_server():
     print(f" PC Status Agent Iniciado Correctamente ")
     print(f" Puerto local: http://localhost:{port}")
     print(f" PIN de seguridad: {CONFIG.get('security_pin')}")
-    print(f" Servidor estático UI: Servido desde ../web")
+    print(f" Servidor estático UI: Servido desde la raíz del proyecto")
     print(f"==================================================")
     try:
         server.serve_forever()
