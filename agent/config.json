@@ -1,0 +1,8 @@
+{
+  "security_pin": "1234",
+  "server_port": 5000,
+  "poll_interval_seconds": 2.5,
+  "cloud_relay_url": "",
+  "cloud_relay_key": "",
+  "auto_shutdown_temp_celsius": 95
+}

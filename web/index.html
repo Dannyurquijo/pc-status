@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>PC Status - Monitoreo Remoto</title>
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#0f172a">
+  <!-- FontAwesome Icons & Google Fonts -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Top App Header -->
+  <header class="app-header">
+    <div class="header-brand">
+      <i class="fa-solid fa-desktop brand-icon"></i>
+      <div>
+        <h1 id="hostname-display">PC Status</h1>
+        <span class="status-badge online" id="connection-status">
+          <i class="fa-solid fa-circle pulse-dot"></i> Conectado
+        </span>
+      </div>
+    </div>
+    <button class="icon-btn" id="btn-config" title="Configurar Conexión">
+      <i class="fa-solid fa-gear"></i>
+    </button>
+  </header>
+
+  <!-- Server Connection Settings Modal / Banner -->
+  <div class="config-banner hidden" id="config-banner">
+    <div class="config-content">
+      <label for="server-url-input"><i class="fa-solid fa-link"></i> Dirección del Agente PC (IP / Tunnel):</label>
+      <div class="input-group">
+        <input type="text" id="server-url-input" placeholder="http://192.168.1.50:5000 o https://mi-pc.trycloudflare.com">
+        <button id="btn-save-config">Guardar</button>
+      </div>
+      <small>Deja vacío para usar el mismo servidor (modo local).</small>
+    </div>
+  </div>
+
+  <main class="dashboard-container">
+
+    <!-- Primary Hardware Metrics Grid -->
+    <section class="metrics-grid">
+
+      <!-- CPU Card -->
+      <div class="card metric-card">
+        <div class="card-header">
+          <div class="card-title"><i class="fa-solid fa-microchip text-cyan"></i> Procesador (CPU)</div>
+          <div class="temp-badge" id="cpu-temp-badge">-- °C</div>
+        </div>
+        <div class="gauge-wrapper">
+          <div class="progress-circle" id="cpu-gauge" style="--percent: 0;">
+            <span class="gauge-value" id="cpu-percent">0%</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <div class="sub-info"><span id="cpu-cores">-- Cores</span></div>
+          <div class="sub-info"><span id="cpu-freq">-- MHz</span></div>
+        </div>
+      </div>
+
+      <!-- RAM Card -->
+      <div class="card metric-card">
+        <div class="card-header">
+          <div class="card-title"><i class="fa-solid fa-memory text-purple"></i> Memoria RAM</div>
+          <div class="badge-sub" id="ram-used-text">0.0 / 0.0 GB</div>
+        </div>
+        <div class="gauge-wrapper">
+          <div class="progress-circle" id="ram-gauge" style="--percent: 0;">
+            <span class="gauge-value" id="ram-percent">0%</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <div class="sub-info">Disponible: <strong id="ram-avail">-- GB</strong></div>
+        </div>
+      </div>
+
+      <!-- Battery Card -->
+      <div class="card metric-card">
+        <div class="card-header">
+          <div class="card-title"><i class="fa-solid fa-battery-three-quarters text-green"></i> Batería</div>
+          <div class="badge-sub" id="battery-status">Verificando...</div>
+        </div>
+        <div class="battery-visual">
+          <div class="battery-bar-container">
+            <div class="battery-fill" id="battery-fill" style="width: 0%;"></div>
+          </div>
+          <span class="battery-percentage" id="battery-percent">0%</span>
+        </div>
+        <div class="card-footer">
+          <div class="sub-info" id="battery-time">--</div>
+        </div>
+      </div>
+
+      <!-- Network Card -->
+      <div class="card metric-card">
+        <div class="card-header">
+          <div class="card-title"><i class="fa-solid fa-network-wired text-orange"></i> Red en Vivo</div>
+          <div class="badge-sub">Ancho de Banda</div>
+        </div>
+        <div class="net-stats">
+          <div class="net-item">
+            <i class="fa-solid fa-arrow-down text-green"></i>
+            <div>
+              <small>Descarga</small>
+              <strong id="net-down">0 KB/s</strong>
+            </div>
+          </div>
+          <div class="net-item">
+            <i class="fa-solid fa-arrow-up text-blue"></i>
+            <div>
+              <small>Carga</small>
+              <strong id="net-up">0 KB/s</strong>
+            </div>
+          </div>
+        </div>
+        <div class="card-footer">
+          <div class="sub-info">Uptime: <strong id="system-uptime">--</strong></div>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- Disks Usage Section -->
+    <section class="card section-card">
+      <div class="card-header">
+        <div class="card-title"><i class="fa-solid fa-hard-drive text-amber"></i> Almacenamiento</div>
+      </div>
+      <div class="disks-list" id="disks-list">
+        <!-- Dynamic Disk Bars -->
+      </div>
+    </section>
+
+    <!-- Top Processes Manager -->
+    <section class="card section-card">
+      <div class="card-header space-between">
+        <div class="card-title"><i class="fa-solid fa-list-check text-rose"></i> Programas en Ejecución</div>
+        <button class="sm-btn" id="btn-refresh-procs"><i class="fa-solid fa-rotate"></i> Actualizar</button>
+      </div>
+      <p class="section-desc">Cierra aplicaciones abiertas en la PC para liberar memoria o enfriarla:</p>
+      
+      <div class="process-table-container">
+        <table class="process-table">
+          <thead>
+            <tr>
+              <th>Programa</th>
+              <th>CPU</th>
+              <th>RAM</th>
+              <th>Acción</th>
+            </tr>
+          </thead>
+          <tbody id="process-table-body">
+            <!-- Dynamic Process Rows -->
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Emergency Controls Panel -->
+    <section class="card section-card emergency-card">
+      <div class="card-header">
+        <div class="card-title text-red"><i class="fa-solid fa-triangle-exclamation"></i> Acciones de Emergencia Remotas</div>
+      </div>
+      <div class="emergency-buttons">
+        <button class="danger-btn" id="btn-emergency-shutdown">
+          <i class="fa-solid fa-power-off"></i> Apagar PC de Emergencia
+        </button>
+        <button class="warning-btn" id="btn-stop-agent">
+          <i class="fa-solid fa-pause"></i> Desactivar Monitoreo Remoto
+        </button>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Security PIN Authorization Modal -->
+  <div class="modal-overlay hidden" id="pin-modal">
+    <div class="modal-box">
+      <div class="modal-header">
+        <i class="fa-solid fa-shield-halved text-cyan"></i>
+        <h3>Autorización requerida</h3>
+      </div>
+      <p id="modal-action-text">Ingresa tu PIN de Seguridad para confirmar esta acción:</p>
+      
+      <input type="password" id="pin-input" placeholder="Introduce el PIN" maxlength="10" autocomplete="off">
+      <div class="modal-error hidden" id="modal-error">PIN Incorrecto</div>
+
+      <div class="modal-actions">
+        <button class="secondary-btn" id="btn-modal-cancel">Cancelar</button>
+        <button class="primary-btn" id="btn-modal-confirm">Confirmar</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
