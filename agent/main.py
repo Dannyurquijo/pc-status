@@ -132,11 +132,11 @@ class PCStatusHandler(http.server.SimpleHTTPRequestHandler):
                 return
 
             elif url_path == '/api/shutdown':
-                self._send_json({"success": True, "message": "Iniciando apagado de emergencia de la PC en 10 segundos..."})
+                self._send_json({"success": True, "message": "Iniciando apagado de emergencia de la PC en 30 segundos..."})
                 def _shutdown():
                     time.sleep(2)
                     if sys.platform == 'win32':
-                        os.system("shutdown /s /f /t 10 /c \"Apagado remoto de emergencia desde PC Status\"")
+                        os.system("shutdown /s /f /t 30 /c \"Apagado remoto de emergencia desde PC Status\"")
                     else:
                         os.system("shutdown -h now")
                 threading.Thread(target=_shutdown, daemon=True).start()
