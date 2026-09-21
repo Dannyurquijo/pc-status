@@ -23,6 +23,7 @@ import urllib.parse
 import psutil
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")))
 import hardware
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
@@ -129,6 +130,24 @@ class PCStatusHandler(http.server.SimpleHTTPRequestHandler):
                     self._send_json({"success": True, "message": "El proceso ya no estaba en ejecución."})
                 except Exception as e:
                     self._send_json({"success": False, "error": f"Error al cerrar proceso: {str(e)}"}, status_code=500)
+                return
+
+            elif url_path == '/api/restart-process':
+                pid = payload.get("pid")
+                name = payload.get("name")
+                if not pid and not name:
+                    self._send_json({"success": False, "error": "PID o nombre no especificado"}, status_code=400)
+                    return
+                try:
+                    import restart_program
+                    target = pid if pid else name
+                    success = restart_program.restart_program(target)
+                    if success:
+                        self._send_json({"success": True, "message": f"Programa {name or pid} reiniciado correctamente."})
+                    else:
+                        self._send_json({"success": False, "error": f"No se pudo reiniciar el programa {name or pid}."})
+                except Exception as e:
+                    self._send_json({"success": False, "error": f"Error al reiniciar programa: {str(e)}"}, status_code=500)
                 return
 
             elif url_path == '/api/shutdown':

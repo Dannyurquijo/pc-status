@@ -6,7 +6,6 @@
   <title>PC Status - Monitoreo Remoto</title>
   <link rel="manifest" href="manifest.json">
   <meta name="theme-color" content="#0f172a">
-  <!-- FontAwesome Icons & Google Fonts -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <link rel="stylesheet" href="style.css">
 </head>
@@ -140,9 +139,13 @@
         <div class="card-title"><i class="fa-solid fa-list-check text-rose"></i> Programas en Ejecución</div>
         <button class="sm-btn" id="btn-refresh-procs"><i class="fa-solid fa-rotate"></i> Actualizar</button>
       </div>
-      <p class="section-desc">Cierra aplicaciones abiertas en la PC para liberar memoria o enfriarla:</p>
       
-      <div class="process-table-container">
+      <div class="search-bar-container">
+        <i class="fa-solid fa-magnifying-glass search-icon"></i>
+        <input type="text" id="proc-search-input" placeholder="Buscar programa (ej. chatgpt, chrome, spotify)...">
+      </div>
+
+      <div class="process-table-container" id="process-table-container">
         <table class="process-table">
           <thead>
             <tr>

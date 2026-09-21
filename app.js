@@ -1,8 +1,10 @@
 // PC Status Mobile Web Dashboard Client App
 
 let serverUrl = localStorage.getItem('pc_status_server_url') || '';
-let currentAction = null; // { type: 'kill' | 'shutdown' | 'stop', payload: {} }
+let currentAction = null; // { type: 'kill' | 'restart' | 'shutdown' | 'stop', payload: {} }
 let pollTimer = null;
+let lastProcessesList = [];
+let isUserInteractingWithTable = false;
 
 document.addEventListener('DOMContentLoaded', () => {
   initUI();
@@ -35,14 +37,28 @@ function initUI() {
     fetchTelemetry();
   });
 
-  // Process Refresh Button
-  document.getElementById('btn-refresh-procs').addEventListener('click', fetchProcesses);
+  // Table Interaction Pause Listeners
+  const tableContainer = document.getElementById('process-table-container');
+  tableContainer.addEventListener('touchstart', () => { isUserInteractingWithTable = true; }, { passive: true });
+  tableContainer.addEventListener('touchend', () => { setTimeout(() => { isUserInteractingWithTable = false; }, 3000); });
+  tableContainer.addEventListener('mouseenter', () => { isUserInteractingWithTable = true; });
+  tableContainer.addEventListener('mouseleave', () => { isUserInteractingWithTable = false; });
 
-  // Emergency Buttons
+  // Process Search Input Listener
+  const searchInput = document.getElementById('proc-search-input');
+  searchInput.addEventListener('input', () => {
+    renderProcesses(lastProcessesList);
+  });
+
+  document.getElementById('btn-refresh-procs').addEventListener('click', () => {
+    isUserInteractingWithTable = false;
+    fetchProcesses();
+  });
+
   document.getElementById('btn-emergency-shutdown').addEventListener('click', () => {
     openPinModal({
       type: 'shutdown',
-      text: '¿Estás seguro de APAGAR remotamente la PC de emergencia?'
+      text: '¿Estás seguro de APAGAR remotamente la PC de emergencia? (Tendrás 30 segundos para cancelar)'
     });
   });
 
@@ -53,7 +69,6 @@ function initUI() {
     });
   });
 
-  // Modal Action Listeners
   document.getElementById('btn-modal-cancel').addEventListener('click', closePinModal);
   document.getElementById('btn-modal-confirm').addEventListener('click', executeModalAction);
 }
@@ -85,11 +100,9 @@ async function fetchTelemetry() {
 }
 
 function updateDashboard(data) {
-  // Hostname & System Info
   if (data.hostname) document.getElementById('hostname-display').innerText = data.hostname;
   if (data.uptime) document.getElementById('system-uptime').innerText = data.uptime;
 
-  // CPU Gauge & Temp
   if (data.cpu) {
     const cpuPct = Math.round(data.cpu.percent || 0);
     document.getElementById('cpu-percent').innerText = `${cpuPct}%`;
@@ -109,7 +122,6 @@ function updateDashboard(data) {
     }
   }
 
-  // RAM Gauge
   if (data.memory) {
     const ramPct = Math.round(data.memory.percent || 0);
     document.getElementById('ram-percent').innerText = `${ramPct}%`;
@@ -118,7 +130,6 @@ function updateDashboard(data) {
     document.getElementById('ram-avail').innerText = `${data.memory.available_gb} GB`;
   }
 
-  // Battery Status
   if (data.battery) {
     const b = data.battery;
     document.getElementById('battery-percent').innerText = `${Math.round(b.percent)}%`;
@@ -127,20 +138,24 @@ function updateDashboard(data) {
     document.getElementById('battery-time').innerText = b.time_left || '';
   }
 
-  // Network Rates
   if (data.network) {
     document.getElementById('net-down').innerText = formatSpeed(data.network.download_kbs);
     document.getElementById('net-up').innerText = formatSpeed(data.network.upload_kbs);
   }
 
-  // Disks List
   if (data.disks && Array.isArray(data.disks)) {
     renderDisks(data.disks);
   }
 
-  // Top Processes
+  // Update process list only if not interacting and modal is hidden
   if (data.top_processes && Array.isArray(data.top_processes)) {
-    renderProcesses(data.top_processes);
+    lastProcessesList = data.top_processes;
+    const isModalOpen = !document.getElementById('pin-modal').classList.contains('hidden');
+    const isSearching = document.getElementById('proc-search-input').value.trim() !== '';
+
+    if (!isUserInteractingWithTable && !isModalOpen && !isSearching) {
+      renderProcesses(lastProcessesList);
+    }
   }
 }
 
@@ -167,16 +182,33 @@ function renderDisks(disks) {
 }
 
 function renderProcesses(processes) {
+  const filterText = document.getElementById('proc-search-input').value.toLowerCase().trim();
   const tbody = document.getElementById('process-table-body');
-  tbody.innerHTML = processes.map(proc => `
+  
+  const filtered = processes.filter(p => {
+    if (!filterText) return true;
+    return p.name.toLowerCase().includes(filterText) || String(p.pid).includes(filterText);
+  });
+
+  if (filtered.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; color:#94a3b8; padding:16px;">Sin resultados para "${escapeHtml(filterText)}"</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = filtered.map(proc => `
     <tr>
       <td><strong>${escapeHtml(proc.name)}</strong> <small style="color:#94a3b8">(PID ${proc.pid})</small></td>
       <td>${proc.cpu_percent}%</td>
       <td>${proc.memory_percent}%</td>
       <td>
-        <button class="kill-btn" onclick="requestKillProcess(${proc.pid}, '${escapeHtml(proc.name)}')">
-          Cerrar
-        </button>
+        <div class="action-buttons-cell">
+          <button class="restart-btn" onclick="requestRestartProcess(${proc.pid}, '${escapeHtml(proc.name)}')">
+            <i class="fa-solid fa-rotate-right"></i> Reiniciar
+          </button>
+          <button class="kill-btn" onclick="requestKillProcess(${proc.pid}, '${escapeHtml(proc.name)}')">
+            <i class="fa-solid fa-xmark"></i> Cerrar
+          </button>
+        </div>
       </td>
     </tr>
   `).join('');
@@ -188,11 +220,20 @@ async function fetchProcesses() {
     const res = await fetch(`${baseUrl}/api/processes`);
     const json = await res.json();
     if (json.success && json.processes) {
-      renderProcesses(json.processes);
+      lastProcessesList = json.processes;
+      renderProcesses(lastProcessesList);
     }
   } catch (err) {
     console.error('Error al actualizar procesos:', err);
   }
+}
+
+function requestRestartProcess(pid, name) {
+  openPinModal({
+    type: 'restart',
+    payload: { pid, name },
+    text: `¿Deseas REINICIAR el programa "${name}" (PID ${pid})?`
+  });
 }
 
 function requestKillProcess(pid, name) {
@@ -236,6 +277,10 @@ async function executeModalAction() {
   if (currentAction.type === 'kill') {
     endpoint = '/api/kill-process';
     bodyData.pid = currentAction.payload.pid;
+  } else if (currentAction.type === 'restart') {
+    endpoint = '/api/restart-process';
+    bodyData.pid = currentAction.payload.pid;
+    bodyData.name = currentAction.payload.name;
   } else if (currentAction.type === 'shutdown') {
     endpoint = '/api/shutdown';
   } else if (currentAction.type === 'stop') {
@@ -260,8 +305,8 @@ async function executeModalAction() {
     alert(json.message || 'Acción ejecutada exitosamente');
     closePinModal();
 
-    if (currentAction.type === 'kill') {
-      setTimeout(fetchProcesses, 1000);
+    if (currentAction.type === 'kill' || currentAction.type === 'restart') {
+      setTimeout(fetchProcesses, 2000);
     }
   } catch (err) {
     errorEl.innerText = 'Error al enviar comando al agente';
