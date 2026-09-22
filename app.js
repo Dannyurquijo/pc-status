@@ -1,6 +1,7 @@
-// PC Status Mobile Web Dashboard Client App
+// PC Status Mobile Web Dashboard Client App with Mandatory PIN Auth & Lockout Handling
 
 let serverUrl = localStorage.getItem('pc_status_server_url') || '';
+let userPin = sessionStorage.getItem('pc_status_pin') || '';
 let currentAction = null; // { type: 'kill' | 'restart' | 'shutdown' | 'stop', payload: {} }
 let pollTimer = null;
 let lastProcessesList = [];
@@ -8,7 +9,7 @@ let isUserInteractingWithTable = false;
 
 document.addEventListener('DOMContentLoaded', () => {
   initUI();
-  startPolling();
+  checkAuthAndStart();
 });
 
 function getApiBaseUrl() {
@@ -23,7 +24,9 @@ function initUI() {
   const configBanner = document.getElementById('config-banner');
   const serverInput = document.getElementById('server-url-input');
   const btnSaveConfig = document.getElementById('btn-save-config');
-  
+  const loginForm = document.getElementById('login-form');
+  const btnLogout = document.getElementById('btn-logout');
+
   serverInput.value = serverUrl;
 
   btnConfig.addEventListener('click', () => {
@@ -34,17 +37,18 @@ function initUI() {
     serverUrl = serverInput.value.trim();
     localStorage.setItem('pc_status_server_url', serverUrl);
     configBanner.classList.add('hidden');
-    fetchTelemetry();
+    checkAuthAndStart();
   });
 
-  // Table Interaction Pause Listeners
+  loginForm.addEventListener('submit', handleLogin);
+  btnLogout.addEventListener('click', handleLogout);
+
   const tableContainer = document.getElementById('process-table-container');
   tableContainer.addEventListener('touchstart', () => { isUserInteractingWithTable = true; }, { passive: true });
   tableContainer.addEventListener('touchend', () => { setTimeout(() => { isUserInteractingWithTable = false; }, 3000); });
   tableContainer.addEventListener('mouseenter', () => { isUserInteractingWithTable = true; });
   tableContainer.addEventListener('mouseleave', () => { isUserInteractingWithTable = false; });
 
-  // Process Search Input Listener
   const searchInput = document.getElementById('proc-search-input');
   searchInput.addEventListener('input', () => {
     renderProcesses(lastProcessesList);
@@ -73,20 +77,135 @@ function initUI() {
   document.getElementById('btn-modal-confirm').addEventListener('click', executeModalAction);
 }
 
+function showLoginScreen(errorMsg = null) {
+  document.getElementById('login-screen').classList.remove('hidden');
+  document.getElementById('main-app').classList.add('hidden');
+  const errorEl = document.getElementById('login-error');
+  if (errorMsg) {
+    errorEl.innerText = errorMsg;
+    errorEl.classList.remove('hidden');
+  } else {
+    errorEl.classList.add('hidden');
+  }
+}
+
+function showMainApp() {
+  document.getElementById('login-screen').classList.add('hidden');
+  document.getElementById('main-app').classList.remove('hidden');
+}
+
+function handleLogout() {
+  sessionStorage.removeItem('pc_status_pin');
+  userPin = '';
+  if (pollTimer) clearInterval(pollTimer);
+  showLoginScreen();
+}
+
+async function handleLogin(e) {
+  if (e) e.preventDefault();
+  const inputPin = document.getElementById('login-pin-input').value.trim();
+  const errorEl = document.getElementById('login-error');
+
+  if (!inputPin) {
+    errorEl.innerText = 'Debes ingresar tu PIN';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+
+  userPin = inputPin;
+  const baseUrl = getApiBaseUrl();
+
+  try {
+    const res = await fetch(`${baseUrl}/api/status`, {
+      method: 'GET',
+      headers: {
+        'X-Security-PIN': userPin,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    const json = await res.json();
+
+    if (res.status === 403 || (json && json.locked)) {
+      errorEl.innerText = json.error || '🚨 SISTEMA BLOQUEADO. Desbloquea desde tu laptop con unlock_agent.bat.';
+      errorEl.classList.remove('hidden');
+      return;
+    }
+
+    if (!res.ok || !json.success) {
+      errorEl.innerText = json.error || 'PIN incorrecto';
+      errorEl.classList.remove('hidden');
+      return;
+    }
+
+    // Success! Save PIN to session
+    sessionStorage.setItem('pc_status_pin', userPin);
+    showMainApp();
+    updateDashboard(json.data);
+    startPolling();
+  } catch (err) {
+    errorEl.innerText = 'Error de conexión con el agente PC';
+    errorEl.classList.remove('hidden');
+  }
+}
+
+async function checkAuthAndStart() {
+  if (!userPin) {
+    showLoginScreen();
+    return;
+  }
+
+  const baseUrl = getApiBaseUrl();
+  try {
+    const res = await fetch(`${baseUrl}/api/status`, {
+      method: 'GET',
+      headers: {
+        'X-Security-PIN': userPin,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    const json = await res.json();
+
+    if (res.ok && json.success) {
+      showMainApp();
+      updateDashboard(json.data);
+      startPolling();
+    } else {
+      showLoginScreen(json.error || 'Sesión expirada o PIN no válido');
+    }
+  } catch (err) {
+    showLoginScreen('No se pudo conectar con el agente PC Status');
+  }
+}
+
 function startPolling() {
-  fetchTelemetry();
+  if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(fetchTelemetry, 2500);
 }
 
 async function fetchTelemetry() {
+  if (!userPin) return;
   const baseUrl = getApiBaseUrl();
   const connStatus = document.getElementById('connection-status');
 
   try {
-    const res = await fetch(`${baseUrl}/api/status`);
-    if (!res.ok) throw new Error('HTTP Error ' + res.status);
+    const res = await fetch(`${baseUrl}/api/status`, {
+      method: 'GET',
+      headers: {
+        'X-Security-PIN': userPin,
+        'Content-Type': 'application/json'
+      }
+    });
+
     const json = await res.json();
-    
+
+    if (res.status === 401 || res.status === 403) {
+      if (pollTimer) clearInterval(pollTimer);
+      showLoginScreen(json.error || 'Acceso Denegado');
+      return;
+    }
+
     if (json.success && json.data) {
       updateDashboard(json.data);
       connStatus.className = 'status-badge online';
@@ -147,7 +266,6 @@ function updateDashboard(data) {
     renderDisks(data.disks);
   }
 
-  // Update process list only if not interacting and modal is hidden
   if (data.top_processes && Array.isArray(data.top_processes)) {
     lastProcessesList = data.top_processes;
     const isModalOpen = !document.getElementById('pin-modal').classList.contains('hidden');
@@ -215,9 +333,16 @@ function renderProcesses(processes) {
 }
 
 async function fetchProcesses() {
+  if (!userPin) return;
   const baseUrl = getApiBaseUrl();
   try {
-    const res = await fetch(`${baseUrl}/api/processes`);
+    const res = await fetch(`${baseUrl}/api/processes`, {
+      method: 'GET',
+      headers: {
+        'X-Security-PIN': userPin,
+        'Content-Type': 'application/json'
+      }
+    });
     const json = await res.json();
     if (json.success && json.processes) {
       lastProcessesList = json.processes;
@@ -247,10 +372,9 @@ function requestKillProcess(pid, name) {
 function openPinModal(actionObj) {
   currentAction = actionObj;
   document.getElementById('modal-action-text').innerText = actionObj.text;
-  document.getElementById('pin-input').value = '';
+  document.getElementById('pin-input').value = userPin; // Pre-fill with session PIN for quick confirmation
   document.getElementById('modal-error').classList.add('hidden');
   document.getElementById('pin-modal').classList.remove('hidden');
-  document.getElementById('pin-input').focus();
 }
 
 function closePinModal() {
@@ -261,7 +385,7 @@ function closePinModal() {
 async function executeModalAction() {
   if (!currentAction) return;
 
-  const pin = document.getElementById('pin-input').value.trim();
+  const pin = document.getElementById('pin-input').value.trim() || userPin;
   const errorEl = document.getElementById('modal-error');
 
   if (!pin) {
@@ -290,11 +414,20 @@ async function executeModalAction() {
   try {
     const res = await fetch(`${baseUrl}${endpoint}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'X-Security-PIN': pin,
+        'Content-Type': 'application/json'
+      },
       body: JSON.stringify(bodyData)
     });
 
     const json = await res.json();
+
+    if (res.status === 403 || (json && json.locked)) {
+      errorEl.innerText = json.error || '🚨 SISTEMA BLOQUEADO. Desbloquea desde tu laptop.';
+      errorEl.classList.remove('hidden');
+      return;
+    }
 
     if (!json.success) {
       errorEl.innerText = json.error || 'PIN incorrecto o error en la acción';

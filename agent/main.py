@@ -1,7 +1,8 @@
 """
 PC Status Main Daemon Agent
 Ultra-lightweight HTTP API & Static Web Server in pure Python.
-Requires < 15MB RAM and < 0.5% CPU.
+Secured with mandatory PIN authentication for all endpoints,
+3-strike intrusion lockout, email alerts, and local batch unlocker.
 """
 import os
 import sys
@@ -13,6 +14,8 @@ if sys.stderr is None:
 
 import json
 import time
+import smtplib
+import datetime
 import functools
 import traceback
 import subprocess
@@ -21,6 +24,8 @@ import http.server
 import socketserver
 import urllib.parse
 import psutil
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")))
@@ -28,12 +33,24 @@ import hardware
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 WEB_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+SECURITY_LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "security_alert.log")
+
+# Global Security State
+FAILED_ATTEMPTS = 0
+IS_LOCKED = False
+LOCK_REASON = ""
 
 def load_config():
     default_config = {
-        "security_pin": "1234",
+        "security_pin": "1532",
         "server_port": 5000,
-        "poll_interval_seconds": 2.5
+        "poll_interval_seconds": 2.5,
+        "max_failed_attempts": 3,
+        "alert_email": "durquijob@gmail.com",
+        "smtp_server": "smtp.gmail.com",
+        "smtp_port": 587,
+        "smtp_user": "",
+        "smtp_password": ""
     }
     if os.path.exists(CONFIG_PATH):
         try:
@@ -46,6 +63,56 @@ def load_config():
 
 CONFIG = load_config()
 
+def send_security_alert(client_ip):
+    """Log security incident and attempt sending email alert."""
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    recipient = CONFIG.get("alert_email", "durquijob@gmail.com")
+    
+    log_msg = f"[{timestamp}] ALERTA DE SEGURIDAD: 3 intentos fallidos de PIN desde IP {client_ip}. SISTEMA BLOQUEADO.\n"
+    print(log_msg, flush=True)
+    
+    try:
+        with open(SECURITY_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(log_msg)
+    except Exception:
+        pass
+
+    # Try sending SMTP email if configured
+    smtp_user = CONFIG.get("smtp_user")
+    smtp_pass = CONFIG.get("smtp_password")
+    if smtp_user and smtp_pass:
+        try:
+            msg = MIMEMultipart()
+            msg['From'] = smtp_user
+            msg['To'] = recipient
+            msg['Subject'] = "🚨 ALERTA DE SEGURIDAD: Bloqueo de PC Status en tu Laptop"
+            
+            body = f"""
+Hola,
+
+Se ha activado el BLOQUEO DE SEGURIDAD en tu aplicación PC Status.
+
+Detalles del Incidente:
+- Fecha y Hora: {timestamp}
+- Origen de la Solicitud: IP {client_ip}
+- Motivo: 3 intentos fallidos de PIN de seguridad.
+
+El sistema ha rechazado todas las conexiones y permanecerá totalmente BLOQUEADO hasta que ejecutes el archivo 'unlock_agent.bat' directamente en tu laptop.
+
+Atentamente,
+Sistema de Seguridad PC Status
+"""
+            msg.attach(MIMEText(body, 'plain', 'utf-8'))
+            
+            server = smtplib.SMTP(CONFIG.get("smtp_server", "smtp.gmail.com"), int(CONFIG.get("smtp_port", 587)))
+            server.starttls()
+            server.login(smtp_user, smtp_pass)
+            server.send_message(msg)
+            server.quit()
+            print(f"[OK] Correo de alerta enviado exitosamente a {recipient}", flush=True)
+        except Exception as e:
+            print(f"[AVISO] Alerta registrada localmente. Error enviando correo SMTP: {e}", flush=True)
+
 class PCStatusHandler(http.server.SimpleHTTPRequestHandler):
     def do_OPTIONS(self):
         """Handle CORS pre-flight requests."""
@@ -53,7 +120,7 @@ class PCStatusHandler(http.server.SimpleHTTPRequestHandler):
             self.send_response(200, "ok")
             self.send_header('Access-Control-Allow-Origin', '*')
             self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-            self.send_header("Access-Control-Allow-Headers", "X-Requested-With, Content-Type, Authorization")
+            self.send_header("Access-Control-Allow-Headers", "X-Requested-With, Content-Type, Authorization, X-Security-PIN")
             self.end_headers()
         except Exception as e:
             print(f"Error en OPTIONS: {e}", flush=True)
@@ -77,27 +144,88 @@ class PCStatusHandler(http.server.SimpleHTTPRequestHandler):
             pass
         return {}
 
-    def _validate_pin(self, payload):
-        pin_sent = str(payload.get("pin", "")).strip()
-        expected_pin = str(CONFIG.get("security_pin", "1234")).strip()
-        return pin_sent == expected_pin
+    def _get_client_ip(self):
+        forwarded = self.headers.get("X-Forwarded-For")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+        return self.client_address[0]
+
+    def _validate_pin_request(self, payload=None):
+        global FAILED_ATTEMPTS, IS_LOCKED, LOCK_REASON
+
+        if IS_LOCKED:
+            return False, f"🚨 SISTEMA BLOQUEADO POR SEGURIDAD (3 intentos fallidos registrados). Alerta enviada a {CONFIG.get('alert_email')}. Para desbloquear, ejecuta 'unlock_agent.bat' en tu laptop."
+
+        # Extract PIN from Header 'X-Security-PIN', query string, or JSON payload
+        pin_sent = self.headers.get("X-Security-PIN", "").strip()
+        
+        if not pin_sent and payload and isinstance(payload, dict):
+            pin_sent = str(payload.get("pin", "")).strip()
+
+        if not pin_sent:
+            query = urllib.parse.urlparse(self.path).query
+            params = urllib.parse.parse_qs(query)
+            if "pin" in params:
+                pin_sent = params["pin"][0].strip()
+
+        expected_pin = str(CONFIG.get("security_pin", "1532")).strip()
+
+        if pin_sent == expected_pin:
+            FAILED_ATTEMPTS = 0
+            return True, "Autenticado"
+
+        # Increment failed attempt
+        FAILED_ATTEMPTS += 1
+        client_ip = self._get_client_ip()
+        print(f"[SEGURIDAD] Intento fallido de PIN (#{FAILED_ATTEMPTS}) desde IP {client_ip}", flush=True)
+
+        if FAILED_ATTEMPTS >= int(CONFIG.get("max_failed_attempts", 3)):
+            IS_LOCKED = True
+            LOCK_REASON = f"3 intentos fallidos desde {client_ip}"
+            send_security_alert(client_ip)
+            return False, f"🚨 SISTEMA BLOQUEADO POR SEGURIDAD (3 intentos fallidos). Se ha notificado a {CONFIG.get('alert_email')}. Desbloquea ejecutando 'unlock_agent.bat' en tu computadora."
+
+        remaining = int(CONFIG.get("max_failed_attempts", 3)) - FAILED_ATTEMPTS
+        return False, f"PIN incorrecto. Quedan {remaining} intento(s) antes del bloqueo permanente."
 
     def do_GET(self):
         try:
             url_path = urllib.parse.urlparse(self.path).path
             
-            # API Routes
-            if url_path == '/api/status':
-                telemetry = hardware.get_full_telemetry()
-                self._send_json({"success": True, "data": telemetry})
-                return
-                
-            elif url_path == '/api/processes':
-                procs = hardware.get_top_processes(limit=20)
-                self._send_json({"success": True, "processes": procs})
+            # Unrestricted static asset requests (UI html/css/js)
+            if url_path in ['/', '/index.html', '/style.css', '/app.js', '/manifest.json', '/favicon.ico']:
+                return super().do_GET()
+
+            # API Unlocking Route (Only allowed via local call or explicit reset)
+            if url_path == '/api/unlock':
+                global IS_LOCKED, FAILED_ATTEMPTS
+                client_ip = self._get_client_ip()
+                if client_ip in ['127.0.0.1', 'localhost', '::1']:
+                    IS_LOCKED = False
+                    FAILED_ATTEMPTS = 0
+                    self._send_json({"success": True, "message": "Sistema desbloqueado exitosamente."})
+                else:
+                    self._send_json({"success": False, "error": "El desbloqueo solo se puede ejecutar desde la laptop local."}, status_code=403)
                 return
 
-            # Serve static Web UI files
+            # Protected API Routes (GET /api/status, GET /api/processes)
+            if url_path.startswith('/api/'):
+                valid, msg = self._validate_pin_request()
+                if not valid:
+                    status = 403 if IS_LOCKED else 401
+                    self._send_json({"success": False, "error": msg, "locked": IS_LOCKED}, status_code=status)
+                    return
+
+                if url_path == '/api/status':
+                    telemetry = hardware.get_full_telemetry()
+                    self._send_json({"success": True, "data": telemetry})
+                    return
+
+                elif url_path == '/api/processes':
+                    procs = hardware.get_top_processes(limit=20)
+                    self._send_json({"success": True, "processes": procs})
+                    return
+
             return super().do_GET()
         except Exception as e:
             print(f"Error procesando GET {self.path}: {e}", flush=True)
@@ -112,8 +240,10 @@ class PCStatusHandler(http.server.SimpleHTTPRequestHandler):
             url_path = urllib.parse.urlparse(self.path).path
             payload = self._get_post_data()
 
-            if not self._validate_pin(payload):
-                self._send_json({"success": False, "error": "PIN de seguridad incorrecto"}, status_code=401)
+            valid, msg = self._validate_pin_request(payload)
+            if not valid:
+                status = 403 if IS_LOCKED else 401
+                self._send_json({"success": False, "error": msg, "locked": IS_LOCKED}, status_code=status)
                 return
 
             if url_path == '/api/kill-process':
@@ -182,10 +312,10 @@ def run_server():
     handler = functools.partial(PCStatusHandler, directory=WEB_DIR)
     server = ThreadedHTTPServer(('0.0.0.0', port), handler)
     print(f"==================================================", flush=True)
-    print(f" PC Status Agent Iniciado Correctamente ", flush=True)
+    print(f" PC Status Agent SEGURIDAD REFORZADA ", flush=True)
     print(f" Puerto local: http://localhost:{port}", flush=True)
     print(f" PIN de seguridad: {CONFIG.get('security_pin')}", flush=True)
-    print(f" Servidor estático UI: Servido desde {WEB_DIR}", flush=True)
+    print(f" Máximo de intentos: {CONFIG.get('max_failed_attempts')} (Notificación a {CONFIG.get('alert_email')})", flush=True)
     print(f"==================================================", flush=True)
     try:
         server.serve_forever()
